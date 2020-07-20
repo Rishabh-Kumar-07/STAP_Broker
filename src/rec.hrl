@@ -14,4 +14,4 @@
 -record(topic_key,{topic_name, key}).
 
 %%% Tuples for storing subscriber of each topic
--record(subscribers,{username, enc_address}).
+-record(subscribers,{username, enc_address, node_flag }).
