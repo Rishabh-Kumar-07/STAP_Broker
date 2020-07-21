@@ -19,7 +19,7 @@
 %%%-include("emqx_mqtt.hrl").
 
 %% API
--export([start/0, stop/0, subscribe/3, create_topic/3]).
+-export([start/0, stop/0, subscribe/3, create_topic/3, publish/2]).
 -export([init/1, handle_cast/2, terminate/2, handle_info/2, handle_call/3]).
 
 
@@ -34,6 +34,12 @@ subscribe(Topic, Username, Enc_Add) ->
 
 create_topic(Publisher_Id, Topic_name, Topic_key) ->
   gen_server:call(broker, {create_topic, Publisher_Id, Topic_name, Topic_key}).
+
+publish(Topic_name, Data) ->
+  gen_server:cast(broker, {publish, Topic_name, Data}).
+
+
+
 
 
 
@@ -82,6 +88,17 @@ handle_call({subscribe, Topic, Username, Enc_Add}, _From, _State) ->
   Insert_sub = insert_sub(Topic, Username, Enc_Add),
   {reply, Insert_sub, Status}.
 
+handle_cast({publish, Topic_name, Data}, _From) ->
+  Event_start = latency_start,
+  Time_start = erlang:timestamp(),
+  ets:insert(topic_key_table, #latency{event = Event_start, timestamp = Time_start}),
+  List_sub = ets:tab2list(Topic_name),
+  ok = send_msg(List_sub, Data),
+  Event_end = latency_end,
+  Time_end = erlang:timestamp(),
+  ets:insert(topic_key_table, #latency{event = Event_end, timestamp = Time_end}),
+  {noreply, Data};
+
 handle_cast(stop, LoopData) ->
   {stop, normal, LoopData}.
 
@@ -101,6 +118,8 @@ terminate(_Reason, _LoopData) ->
 start() ->
   PubOpts = [named_table, public, {read_concurrency, true}, {write_concurrency, true}, {keypos, #topic_key.topic_name}],
   _Topic_status = ets:new(topic_key_table, [set | PubOpts ]),
+  ExpOpts = [named_table, public, {read_concurrency, true}, {write_concurrency, true}, {keypos, #latency.event}],
+  _Ev_st = ets:new(latency_exp, [set | ExpOpts]),
   gen_server:start_link({local, broker}, broker, [], []).
 
 init(_Args) ->
@@ -119,7 +138,22 @@ search_topickey(Topic) ->
   Table = topic_key_table,
   ets:lookup_element(Table, Topic, 3).
 
+send_msg([H|T], Data) ->
+  tcp_client(H, Data),
+  _ = send_msg(T, Data);
 
+send_msg([], Data) ->
+  _ =  ok.
+
+tcp_client(Add, Data) ->
+  {_Sub, _Username, Address, _Node} = Add,
+  {Ip, Port} = Address,
+  io:fwrite("~p~n", [Ip]),
+  io:fwrite("~p~n", [Port]),
+  {ok, Sock} = gen_tcp:connect(Ip, Port, [binary, {packet, 0}]),
+  ok = gen_tcp:send(Sock, Data),
+  ok = gen_tcp:close(Sock).
+  %%Address.
 
 
 
