@@ -15,3 +15,5 @@
 
 %%% Tuples for storing subscriber of each topic
 -record(subscribers,{username, enc_address, node_flag }).
+
+-record(latency,{event, timestamp}).
