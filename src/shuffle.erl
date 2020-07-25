@@ -12,7 +12,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, first_shuffle_setup/2, server_setup/1]).
+-export([start_link/0, first_shuffle_setup/2, server_setup/1, get_pubkey/0, client_shuffle/0]).
 
 
 %% gen_server callbacks
@@ -23,6 +23,9 @@
 
 -record(shuffling_server_state, {}).
 -record(setup_initial_table, {identifier, key}).
+-record(elg_keys, {modulus, generator, pub_key, pri_key}).
+-record(perm, {order}).
+-record(dec, {input, keys}).
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -33,13 +36,25 @@
 start_link() ->
   PubOpts = [named_table, public, {read_concurrency, true}, {write_concurrency, true}, {keypos, #setup_initial_table.identifier}],
   _Topic_status = ets:new(key_setup, [ordered_set | PubOpts ]),
+  KeyOpts = [named_table, public, {read_concurrency, true}, {write_concurrency, true}, {keypos, #elg_keys.pub_key}],
+  _Stat = ets:new(elgamal, [set | KeyOpts ]),
+  PermOpts = [named_table, public, {read_concurrency, true}, {write_concurrency, true}, {keypos, #perm.order}],
+  _St = ets:new(permutation, [set | PermOpts ]),
+  DecOpts = [named_table, public, {read_concurrency, true}, {write_concurrency, true}, {keypos, #dec.keys}],
+  _STA = ets:new(decproof, [set | DecOpts ]),
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 first_shuffle_setup(Identifier, Keys) ->
   gen_server:cast(shuffle, {fist_setup,Identifier, Keys}).
 
+client_shuffle() ->
+  gen_server:cast(shuffle,{client_shuffle}).
+
 server_setup(Clients) ->
   gen_server:cast(shuffle,{start_server_setup, Clients}).
+
+get_pubkey() ->
+  gen_server:call(shuffle,{pub_key}).
 
 
 
@@ -57,16 +72,14 @@ init([]) ->
 
 %% @private
 %% @doc Handling call messages
--spec(handle_call(Request :: term(), From :: {pid(), Tag :: term()},
-    State :: #shuffling_server_state{}) ->
-  {reply, Reply :: term(), NewState :: #shuffling_server_state{}} |
-  {reply, Reply :: term(), NewState :: #shuffling_server_state{}, timeout() | hibernate} |
-  {noreply, NewState :: #shuffling_server_state{}} |
-  {noreply, NewState :: #shuffling_server_state{}, timeout() | hibernate} |
-  {stop, Reason :: term(), Reply :: term(), NewState :: #shuffling_server_state{}} |
-  {stop, Reason :: term(), NewState :: #shuffling_server_state{}}).
+
 handle_call(_Request, _From, State = #shuffling_server_state{}) ->
-  {reply, ok, State}.
+  {reply, ok, State};
+
+handle_call({pub_key}, _Req, _From) ->
+  Pub_Key = fetch_pubkey(),
+  State = ok,
+  {reply, Pub_Key, State}.
 
 %% @private
 %% @doc Handling cast messages
@@ -78,7 +91,15 @@ handle_cast({fist_setup,Identifier, Keys}, _From) ->
 
 handle_cast({start_server_setup, Clients}, _From) ->
   generate_keys(),
-  generate_permutation(Clients);
+  State = ok,
+  generate_permutation(Clients),
+ {noreply, State};
+
+handle_cast({client_shuffle}, _From) ->
+  Shuffled = shuffle_input(),
+  State = ok,
+  _Dec_and_proof = dec_and_proof(Shuffled),
+  {noreply, State};
 
 handle_cast(_Request, State = #shuffling_server_state{}) ->
   {noreply, State}.
@@ -116,4 +137,44 @@ code_change(_OldVsn, State = #shuffling_server_state{}, _Extra) ->
 
 
 generate_keys() ->
-  Elgamal_key = os:cmd("python3 elgamal.py").
+  Keys = os:cmd("python3 elgamal.py"),
+  Var = [list_to_integer(I) || I <- string:tokens(Keys,", ")],
+  [Mod, Gen, Pub, Pri] = Var,
+  ets:insert(elgamal, #elg_keys{modulus = Mod, generator = Gen, pub_key = Pub, pri_key = Pri}).
+
+generate_permutation(Clients) ->
+  Perm = [rand:uniform() || _ <- lists:seq(1, Clients)],
+  ets:insert(permutation, #perm{order = Perm}).
+
+fetch_pubkey() ->
+  [Key] = ets:tab2list(elgamal),
+  {_Sub ,Mod, Gen, Pub, Pri} = Key,
+  Reply = {Mod, Gen, Pub},
+  Reply.
+
+shuffle_input() ->
+  Inp = ets:tab2list(key_setup),
+  [Order] = ets:tab2list(permutation),
+  {_Na, Perm}  = Order,
+  Inp_Cli = lists:zip(Perm, Inp),
+  Reply = lists:sort(Inp_Cli),
+  Reply.
+
+dec_and_proof(Shuffled) ->
+  Input = [X||{_,X} <- Shuffled],
+  Dec = [X||{_,_ ,X} <- Input],
+  Keys = get_key(),
+  ets:insert(decproof, #dec{input = Dec, keys = Keys}),
+  [Data] = ets:tab2list(decproof),
+  {_Dnt, ClIp, Key} = Data,
+  file:write_file("client_input", io_lib:fwrite("~p.\n", [ClIp])),
+  file:write_file("keys", io_lib:fwrite("~p.\n", [Key])).
+  %%file:write_file("decrypt", io_lib:fwrite("~p.\n", [Data])),
+
+  %%ets:delete_all_objects(decproof).
+
+get_key() ->
+  [Key] = ets:tab2list(elgamal),
+  {_Sub ,Mod, Gen, Pub, Pri} = Key,
+  Reply = {Mod, Gen, Pub, Pri},
+  Reply.
