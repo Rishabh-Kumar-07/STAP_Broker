@@ -25,6 +25,7 @@
 -record(client_key_record,{identifier, keys}).
 -record(input,{item}).
 -record(msg_table,{msg}).
+-record(enc_msg,{identifier, cipher}).
 
 %%%===================================================================
 %%% API
@@ -36,12 +37,17 @@ start_link() ->
   _St = ets:new(permutation, [ordered_set | PermOpts ]),
   ClOpts = [named_table, public, {read_concurrency, true}, {write_concurrency, true}, {keypos, #client_key_record.identifier}],
   _Dom = ets:new(client_key, [ordered_set | ClOpts ]),
-  COpts = [named_table, public, {read_concurrency, true}, {write_concurrency, true}, {keypos, #input.item}],
+  COpts = [named_table, public, {read_concurrency, true}, {write_concurrency, false}, {keypos, #input.item}],
   _Do = ets:new(handle_input, [set | COpts ]),
   _D = ets:new(server_key, [ordered_set | ClOpts ]),
-  Cpts = [named_table, public, {read_concurrency, true}, {write_concurrency, true}, {keypos, #msg_table.msg}],
+  Cpts = [named_table, public, {read_concurrency, true}, {write_concurrency, false}, {keypos, #msg_table.msg}],
   _ = ets:new(input_msg, [set | Cpts ]),
-  _ = ets:new(encrypted_msg, [set | Cpts ]),
+  Cpts1 = [named_table, public, {read_concurrency, true}, {write_concurrency, false}, {keypos, #enc_msg.identifier}],
+  _ = ets:new(encrypted_msg, [set | Cpts1 ]),
+  _ = ets:new(decrypted_msg, [set | Cpts ]),
+  _ = ets:new(working_space, [set | Cpts ]),
+  Cts = [named_table, public, {read_concurrency, true}, {write_concurrency, false}, {keypos, #enc_msg.cipher}],
+  _ = ets:new(final_msg, [set | Cts ]),
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 simulation_setup(Server, Client) ->
@@ -84,7 +90,11 @@ handle_cast({setup, Server, Client}, _From) ->
   {noreply, State};
 
 handle_cast({send_msg, Server, Client}, _From) ->
-  generate_msg(Client);
+  generate_msg(Client),
+  encrypt_msg(Client, Server),
+  %%decrypt_msg(Client,Server),
+  State = ok,
+  {noreply, State};
 
 handle_cast(_Request, State = #simulation_state{}) ->
   {noreply, State}.
@@ -167,5 +177,44 @@ shuffle_input(Server) ->
 
 generate_msg(Client) ->
   L = lists:seq(1,Client),
-  MSG = [{crypto:strong_rand_bytes(32), X}|| X <- L],
+  MSG = [{X, crypto:strong_rand_bytes(32)}|| X <- L],
   ets:insert(input_msg, #msg_table{msg = MSG}).
+
+encrypt_msg(Client, Server) ->
+  [{_,Msg}] = ets:tab2list(input_msg),
+  [ encrypt_sp(A,X) || {A,X} <-Msg].
+
+encrypt_sp(Identifier, X) ->
+  Key = ets:tab2list(client_key),
+  {_,_,Server_Key} = lists:nth(Identifier,Key),
+  ets:insert(working_space, #msg_table{msg = X}),
+  [process_encryption(SKey, IV, AAD) || {_,SKey,IV,AAD} <- Server_Key],
+  Encrypted = ets:tab2list(working_space),
+  ets:insert(encrypted_msg, #enc_msg{identifier = Identifier,cipher = Encrypted}).
+
+
+decrypt_msg(Client, Server) ->
+  L = ets:tab2list(encrypted_msg),
+  L1 = lists:sort(L),
+  Cip = [Cip ||{_,_,Cip}<-L],
+  Key = ets:tab2list(client_key),
+  Skey = [Server_Key || {_,_,Server_Key} <- Key],
+  Com = lists:zip(Skey,Cip),
+  [decrypt_sp(L_Key,Tex) || {L_Key,Tex} <-Com].
+
+decrypt_sp(LKey, Tex) ->
+  Key = lists:reverse(LKey),
+  [{_, Cipher}] = Tex.
+  %%Cip = [process_decryption(SKey,IV,AAD)|| {_,SKey, IV, AAD}<-Key ],
+  %%ets:insert(decrypted_msg, #msg_table{msg = Cip}).
+
+%%crypto:crypto_one_time_aead(aes_256_ccm, SKey, IV, Cipher, AAD,Tag, false)
+process_encryption(SKey, IV, AAD) ->
+  Msg = ets:tab2list(working_space),
+  {_,Text} = lists:nth(1,Msg),
+  Cip = crypto:crypto_one_time_aead(aes_256_ccm, SKey, IV, Text, AAD, true),
+  {Cp1, Cp2} = Cip,
+  Cip_F = <<Cp1/binary, Cp2/binary>>,
+  ets:delete_all_objects(working_space),
+  ets:insert(working_space, #msg_table{msg = Cip_F}).
+
