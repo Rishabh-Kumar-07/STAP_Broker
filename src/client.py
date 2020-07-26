@@ -23,7 +23,7 @@ Server_key = []
 def send_msg(ciphertext, identifier):
   s1 = "shuffle:aes_msg("+str(identifier)+","
   s2 = ")."
-  reply = s1 + ciphertext + s2
+  reply = s1 + "a" +ciphertext + s2
   reply = bytes(reply, "utf-8")
   return(reply)
 
@@ -107,5 +107,7 @@ for m in range(0,10):
   tosend = cip+"mac_starting"+sign+"iv_starting"+iv
   reply = send_msg(tosend, m)
   print(reply)
+  time.sleep(2)
   tn.write(reply)
-  time.sleep(0.2)
+
+time.sleep(4)
