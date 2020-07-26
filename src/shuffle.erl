@@ -12,7 +12,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, first_shuffle_setup/2, server_setup/1, get_pubkey/0, client_shuffle/0]).
+-export([start_link/0, first_shuffle_setup/2, server_setup/1, get_pubkey/0, client_shuffle/0, aes_key/2]).
 
 
 %% gen_server callbacks
@@ -26,6 +26,7 @@
 -record(elg_keys, {modulus, generator, pub_key, pri_key}).
 -record(perm, {order}).
 -record(dec, {input, keys}).
+-record(aes_key_rec,{identifier, key}).
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -42,6 +43,9 @@ start_link() ->
   _St = ets:new(permutation, [set | PermOpts ]),
   DecOpts = [named_table, public, {read_concurrency, true}, {write_concurrency, true}, {keypos, #dec.keys}],
   _STA = ets:new(decproof, [set | DecOpts ]),
+  AesOpts = [named_table, public, {read_concurrency, true}, {write_concurrency, true}, {keypos, #aes_key_rec.identifier}],
+  _AES = ets:new(aes_key_tab, [ordered_set | AesOpts ]),
+  _MSG = ets:new(aes_msg_tab, [ordered_set | AesOpts ]),
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 first_shuffle_setup(Identifier, Keys) ->
@@ -56,7 +60,11 @@ server_setup(Clients) ->
 get_pubkey() ->
   gen_server:call(shuffle,{pub_key}).
 
+aes_key(Identifier, Key) ->
+  gen_server:cast(shuffle,{aes_key, Identifier, Key}).
 
+aes_msg(Identifier, Msg) ->
+  gen_server:cast(shuffle,{aes_msg, Identifier, Msg}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -99,6 +107,17 @@ handle_cast({client_shuffle}, _From) ->
   Shuffled = shuffle_input(),
   State = ok,
   _Dec_and_proof = dec_and_proof(Shuffled),
+  {noreply, State};
+
+handle_cast({aes_key, Identifier, Key}, _From ) ->
+  ets:insert(aes_key_tab, #aes_key_rec{identifier = Identifier, key = Key}),
+  State = ok,
+  {noreply, State};
+
+
+handle_cast({aes_msg, Identifier, Key}, _From ) ->
+  ets:insert(aes_msg_tab, #aes_key_rec{identifier = Identifier, key = Key}),
+  State = ok,
   {noreply, State};
 
 handle_cast(_Request, State = #shuffling_server_state{}) ->
@@ -168,10 +187,10 @@ dec_and_proof(Shuffled) ->
   [Data] = ets:tab2list(decproof),
   {_Dnt, ClIp, Key} = Data,
   file:write_file("client_input", io_lib:fwrite("~p.\n", [ClIp])),
-  file:write_file("keys", io_lib:fwrite("~p.\n", [Key])).
+  file:write_file("keys", io_lib:fwrite("~p.\n", [Key])),
   %%file:write_file("decrypt", io_lib:fwrite("~p.\n", [Data])),
-
-  %%ets:delete_all_objects(decproof).
+  ets:delete_all_objects(decproof),
+  _ = os:cmd("python3 dec_and_proof.py").
 
 get_key() ->
   [Key] = ets:tab2list(elgamal),
