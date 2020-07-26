@@ -7,6 +7,8 @@ from Crypto.Util.number import GCD
 from Crypto.Cipher import AES
 import time
 import string
+import hmac
+import hashlib
 
 def get_random_string(length):
     letters = string.ascii_lowercase
@@ -17,6 +19,13 @@ HOST = "localhost"
 tn = telnetlib.Telnet(HOST, 1055)
 No_server = int(input("Enter no. of server"))
 Server_key = []
+
+def send_msg(ciphertext, identifier):
+  s1 = "shuffle:aes_msg("+str(identifier)+","
+  s2 = ")."
+  reply = s1 + ciphertext + s2
+  reply = bytes(reply, "utf-8")
+  return(reply)
 
 def generate_reply(identifier, ciphertext):
   s1 = "shuffle:first_shuffle_setup("+str(identifier)+","
@@ -49,9 +58,10 @@ for i in range(0, No_server):
 
 IV = []
 AES_Key = []
-
+AES_secret = []
 for m in range(0,10):
   aes_key = bytes(get_random_string(32),"utf-8")
+  AES_secret.append(aes_key)
   iv = Random.new().read(AES.block_size)
   cipher = AES.new(aes_key, AES.MODE_CFB, iv)
   IV.append(iv)
@@ -75,4 +85,27 @@ for m in range(0,10):
   tn.write(reply)
   time.sleep(0.2)
 
-#time.sleep(20)
+time.sleep(1)
+tn.close()
+try:
+    while True:
+      continue
+except KeyboardInterrupt:
+    pass
+
+tn = telnetlib.Telnet(HOST, 1055)
+
+for m in range(0,10):
+  key = AES_Key[m]
+  iv = IV[m]
+  msg_c = "msg from client"+str(m)
+  sign = hmac.HMAC(key = AES_secret[m], msg = bytes(msg_c , 'utf-8'),digestmod = hashlib.sha1).hexdigest()
+  print(sign)
+  cip = key.encrypt(msg_c)
+  cip = cip.hex()
+  iv = iv.hex()
+  tosend = cip+"mac_starting"+sign+"iv_starting"+iv
+  reply = send_msg(tosend, m)
+  print(reply)
+  tn.write(reply)
+  time.sleep(0.2)
