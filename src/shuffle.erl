@@ -12,7 +12,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, first_shuffle_setup/2, server_setup/1, get_pubkey/0, client_shuffle/0, aes_key/2]).
+-export([start_link/0, first_shuffle_setup/2, server_setup/1, get_pubkey/0, client_shuffle/0, aes_key/2, aes_msg/2]).
 
 
 %% gen_server callbacks
