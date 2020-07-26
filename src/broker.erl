@@ -19,7 +19,7 @@
 %%%-include("emqx_mqtt.hrl").
 
 %% API
--export([start/0, stop/0, subscribe/3, create_topic/3, publish/2]).
+-export([start/0, stop/0, subscribe/3, create_topic/3, publish/2, register/2]).
 -export([init/1, handle_cast/2, terminate/2, handle_info/2, handle_call/3]).
 
 
@@ -28,6 +28,9 @@
 %%%===================================================================
 
 %% @doc Spawns the server and registers the local name (unique)
+
+register(Username, Public_Key) ->
+  gen_server:cast(broker, {register,Username, Public_Key}).
 
 subscribe(Topic, Username, Enc_Add) ->
   gen_server:call(broker, {subscribe, Topic, Username, Enc_Add}).
@@ -91,13 +94,16 @@ handle_call({subscribe, Topic, Username, Enc_Add}, _From, _State) ->
 handle_cast({publish, Topic_name, Data}, _From) ->
   Event_start = latency_start,
   Time_start = erlang:timestamp(),
-  ets:insert(topic_key_table, #latency{event = Event_start, timestamp = Time_start}),
+  ets:insert(latency_exp, #latency{event = Event_start, timestamp = Time_start}),
   List_sub = ets:tab2list(Topic_name),
   ok = send_msg(List_sub, Data),
   Event_end = latency_end,
   Time_end = erlang:timestamp(),
-  ets:insert(topic_key_table, #latency{event = Event_end, timestamp = Time_end}),
+  ets:insert(latency_exp, #latency{event = Event_end, timestamp = Time_end}),
   {noreply, Data};
+
+handle_cast({register, Username, Public_Key}, _From) ->
+  ets:insert(regi_user, #reg_user{username = Username, key = Public_Key});
 
 handle_cast(stop, LoopData) ->
   {stop, normal, LoopData}.
@@ -120,6 +126,8 @@ start() ->
   _Topic_status = ets:new(topic_key_table, [set | PubOpts ]),
   ExpOpts = [named_table, public, {read_concurrency, true}, {write_concurrency, true}, {keypos, #latency.event}],
   _Ev_st = ets:new(latency_exp, [set | ExpOpts]),
+  RegOpts = [named_table, public, {read_concurrency, true}, {write_concurrency, true}, {keypos, #reg_user.username}],
+  _Reg_tb = ets:new(regi_user, [set | RegOpts]),
   gen_server:start_link({local, broker}, broker, [], []).
 
 init(_Args) ->
